@@ -12,13 +12,6 @@ from .voter_group import VoterGroup
 from .result import ElectionResult
 
 
-class NotEnoughCandidatesError(Exception):
-    pass
-
-class InvalidScoreRangeError(Exception):
-    pass
-
-
 class District:
 
     def __init__(self, name, total_voters, voter_groups=[]):
@@ -247,14 +240,14 @@ class District:
         return ballots
 
     def simulate_ntv(self, n, seats, candidates, randomize=False):
-        """Simulates a generic non-transferable vote.
+        """Simulates a generic non-transferable vote system.
 
-        This function is a template for multiple non-transferable vote (MNTV), 
-        single non-transferable vote (SNTV) and first-past-the-post (FPTP) 
-        electoral systems.
+        This function is a template for single non-transferable vote (SNTV), 
+        first-past-the-post (FPTP), multiple non-transferable vote (MNTV), and 
+        limited voting electoral systems.
         
         This function doesn't account for tactical voting, which may have a 
-        huge impact on real life uses of this voting system.
+        huge impact on real life uses of these voting systems.
 
         Args:
             n: Number of available votes per ballot.
@@ -267,30 +260,33 @@ class District:
             process and other relevant information.
         
         Raises:
+            NoSeatsToFillError: If there number of seats given is less than 1.
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
+        if seats < 1:
+            raise NoSeatsToFillError
         if len(candidates) <= 1 or seats > len(candidates):
             raise NotEnoughCandidatesError
         # Generate block vote ballots
         # Each voter group votes in order of party preference
         ballots = self.generate_block_ballots(n, candidates, randomize)
         # Count votes
-        results = {c: 0 for c in candidates}
+        counts = {c: 0 for c in candidates}
         for ballot, votes in ballots:
             for candidate in ballot:
-                results[candidate] += votes
+                counts[candidate] += votes
         # The winners are chosen by vote count in descending order,
         # until all seats are filled
-        winners = [c for c, v in sort_dict_desc(results)[0:seats]]
-        # Prepare results
+        winners = [c for c, v in sort_dict_desc(counts)[0:seats]]
+        # Prepare result
         name = 'Non-transferable vote (NTV)'
         details = [f'{n} votes per ballot',
                    f'{seats} seats',
                    f'{len(candidates)} candidates']
         if randomize:
             details.append('Randomized ballot generation')
-        vr = ElectionResult(name, results, winners, details=details)
-        return vr
+        result = ElectionResult(name, counts, winners, details=details)
+        return result
     
     def simulate_sntv(self, seats, candidates, randomize=False):
         """Simulates single non-transferable vote or multi-member plurality.
@@ -312,15 +308,16 @@ class District:
             process and other relevant information.
         
         Raises:
+            NoSeatsToFillError: If there number of seats given is less than 1.
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
-        # Get results: multiple-seat, single-vote NTV
-        vr = self.simulate_ntv(1, seats, candidates, randomize=randomize)
+        # Get result: multiple-seat, single-vote NTV
+        result = self.simulate_ntv(1, seats, candidates, randomize=randomize)
         # Change name
-        vr.name = 'Single non-transferable vote (SNTV)'
+        result.voting_system = 'Single non-transferable vote (SNTV)'
         # Remove votes per ballot line
-        del vr.details[0]
-        return vr
+        del result.details[0]
+        return result
 
     def simulate_fptp(self, candidates, randomize=False):
         """Simulates first-past-the-post voting or single-member plurality.
@@ -343,13 +340,13 @@ class District:
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
-        # Get results: single-seat SNTV
-        vr = self.simulate_sntv(1, candidates)
+        # Get result: single-seat SNTV
+        result = self.simulate_sntv(1, candidates)
         # Change name
-        vr.name = 'First-past-the-post (FPTP)'
+        result.voting_system = 'First-past-the-post (FPTP)'
         # Remove number of seats line
-        del vr.details[0]
-        return vr
+        del result.details[0]
+        return result
     
     def simulate_mntv(self, seats, candidates, randomize=False):
         """Simulates multiple non-transferable vote or block vote.
@@ -371,15 +368,49 @@ class District:
             process and other relevant information.
         
         Raises:
+            NoSeatsToFillError: If there number of seats given is less than 1.
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
-        # Get results: multiple-seat, multiple-vote NTV
-        vr = self.simulate_ntv(seats, seats, candidates, randomize=randomize)
+        # Get result: multiple-seat, multiple-vote NTV
+        result = self.simulate_ntv(seats, seats, candidates, randomize=randomize)
         # Change name
-        vr.name = 'Multiple non-transferable vote (MNTV)'
-        # Remove number of votes line
-        del vr.details[0]
-        return vr
+        result.voting_system = 'Multiple non-transferable vote (MNTV)'
+        return result
+    
+    def simulate_limited_voting(self, seats, candidates, randomize=False):
+        """Simulates limited voting.
+
+        Limited voting is a plurality voting system for multiple seat 
+        elections. Voters have fewer votes than there are seats available, and 
+        then the candidates with the most votes win those seats.
+        
+        This function doesn't account for tactical voting, which may have a 
+        huge impact on real life uses of this voting system.
+
+        In this implementation, the number of votes per ballot is set to 
+        be a random number between 5 and 10, but never exceeding the number 
+        of seats to fill minus one.
+
+        Args:
+            seats: Number of seats to fill.
+            candidates: List of candidates.
+            randomize: Randomize selection or not.
+
+        Returns:
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
+        
+        Raises:
+            NoSeatsToFillError: If there number of seats given is less than 1.
+            NotEnoughCandidatesError: If the list of candidates is too short.
+        """
+        # Number of votes per ballot
+        n = min(rd.randint(5, 10), seats - 1)
+        # Get result: multiple-seat, fewer-votes-than-seats NTV
+        result = self.simulate_ntv(n, seats, candidates, randomize=randomize)
+        # Change name
+        result.voting_system = 'Limited voting'
+        return result
     
     def simulate_trs(self, candidates, randomize=False):
         """Simulates two-round system or runoff voting.
@@ -416,37 +447,37 @@ class District:
         # Each voter group votes in order of party preference
         ballots = self.generate_block_ballots(1, candidates, randomize)
         # Count votes for the first round
-        results = {c: 0 for c in candidates}
+        counts = {c: 0 for c in candidates}
         total_votes = 0
         for ballot, votes in ballots:
             candidate = ballot[0]
-            results[candidate] += votes
+            counts[candidate] += votes
         # Check if a majority was reached
         majority_reached = False
-        for candidate, votes in results:
+        for candidate, votes in counts:
             if votes > 0.5 * total_votes:
                 majority_reached = True
                 break
         # If there's no majority, move on to the second round
         if not majority_reached:
             # Keep only the top two candidates from the previous round
-            a, b = [c for c, v in sort_dict_desc(results)[0:2]]
+            a, b = [c for c, v in sort_dict_desc(counts)[0:2]]
             # Make each voter group choose the one they prefer
             ballots = self.generate_block_ballots(1, [a, b], randomize)
-            # Reset results and count votes 
-            results = {a: 0, b: 0}
+            # Reset and count votes for the finalists
+            counts = {a: 0, b: 0}
             for ballot, votes in ballots:
                 candidate = ballot[0]
-                results[candidate] += votes
+                counts[candidate] += votes
         # The winner is the candidate with the majority in the end
-        winner = sort_dict_desc(results)[0][0]
-        # Prepare results
+        winner = sort_dict_desc(counts)[0][0]
+        # Prepare result
         name = 'Two-round system (TRS)'
         details = [f'{len(candidates)} initial candidates']
         if randomize:
             details.append('Randomized ballot generation')
-        vr = ElectionResult(name, results, [winner], details=details)
-        return vr
+        result = ElectionResult(name, counts, [winner], details=details)
+        return result
     
     def simulate_stv(self, seats, candidates, droop_quota=True,
                      surplus_transfers=True, randomize=False):
@@ -496,8 +527,11 @@ class District:
             process and other relevant information.
         
         Raises:
+            NoSeatsToFillError: If there number of seats given is less than 1.
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
+        if seats < 1:
+            raise NoSeatsToFillError
         if len(candidates) <= 1 or seats > len(candidates):
             raise NotEnoughCandidatesError
         # Ballot size
@@ -505,11 +539,11 @@ class District:
         # Generate ranked ballots for each voter group
         ballots = self.generate_ranked_ballots(n, candidates, randomize)
         # Count first choices
-        results = {c: 0 for c in candidates}
+        counts = {c: 0 for c in candidates}
         total_votes = 0
         for ranking, votes in ballots:
             first_choice = ranking[0]
-            results[first_choice] +=  votes
+            counts[first_choice] += votes
             total_votes += votes
         # Calculate quota if required
         quota = None
@@ -519,11 +553,11 @@ class District:
         winners = []
         while len(winners) < seats:
             # Get remaining candidates
-            remaining = [(c, v) for c, v in sort_dict_desc(results)
+            remaining = [(c, v) for c, v in sort_dict_desc(counts)
                          if c not in winners and v > 0]
             # If there are two remaining candidates in a single-seat election,
             # mark winner and end process right away, to have more than one 
-            # candidate in the results table
+            # candidate in the vote counts table
             if seats == 1 and len(remaining) == 2:
                 winner = remaining[0][0]
                 winners.append(winner)
@@ -547,7 +581,7 @@ class District:
                             r.remove(candidate)
                         # Remove surplus votes from candidate's vote count
                         surplus = votes - quota
-                        results[candidate] -= surplus
+                        counts[candidate] -= surplus
                         # If required, transfer surplus votes
                         if surplus_transfers and surplus > 0:
                             # Find the next choice candidate in all ballots
@@ -562,13 +596,13 @@ class District:
                             ratio = surplus / votes
                             for c, v in next_choices:
                                 new_votes = v * ratio
-                                results[c] += m.floor(new_votes)
+                                counts[c] += m.floor(new_votes)
                                 surplus -= new_votes
             # If no candidate reached the quota (or not using it)
             if not reached_quota:
                 # Eliminate the least favored candidate (LFC)
                 lfc = remaining[-1][0]
-                results[lfc] = 0
+                counts[lfc] = 0
                 # Find the next choice candidate of each voter group that
                 # supported the LFC and remove the LFC from each ranking
                 next_choices = {}
@@ -580,11 +614,11 @@ class District:
                     r.remove(lfc)
                 # Distribute LFC votes among next choices
                 for c, v in next_choices:
-                    results[c] += v
+                    counts[c] += v
                 # Remove candidate from the ballots
                 for r, v in ballots:
                     r.remove(candidate)    
-        # Prepare results
+        # Prepare result
         name = 'Single transferable vote (STV)'
         details = [f'({seats} seats',
                    f'{len(candidates)} candidates',
@@ -600,8 +634,8 @@ class District:
             details.append(method)
         else:
             details.append('Elimination transfers only')
-        vr = ElectionResult(name, results, winners, details=details)
-        return vr
+        result = ElectionResult(name, counts, winners, details=details)
+        return result
 
     def simulate_irv(self, candidates, randomize=False):
         """Simulates instant-runoff voting.
@@ -632,16 +666,16 @@ class District:
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
-        # Get results: single-seat, eliminations-only STV
-        vr = self.simulate_stv(1, candidates, droop_quota=False,
-                               randomize=randomize)
+        # Get result: single-seat, eliminations-only STV
+        result = self.simulate_stv(1, candidates, droop_quota=False,
+                                   randomize=randomize)
         # Change name
-        vr.name = 'Instant-runoff voting (IRV)'
+        result.voting_system = 'Instant-runoff voting (IRV)'
         # Remove number of seats line
-        del vr.details[0]
+        del result.details[0]
         # Remove method line
-        del vr.details[-1]
-        return vr
+        del result.details[-1]
+        return result
     
     def simulate_copeland(self, candidates, randomize=False):
         """Simulates Copeland's method voting.
@@ -694,7 +728,7 @@ class District:
             # Loop through each ballot
             for ranking, votes in ballots:
                 # Check which candidate is preferred and increase its 
-                # vote count. There are no ties in any ranking.
+                # vote count. Ties are impossible.
                 if ranking.index(a) < ranking.index(b):
                     votes[a] += votes
                 else:
@@ -709,13 +743,13 @@ class District:
         # The winner is the candidate with the highest win-loss score
         win_loss = {c: won[c] - lost[c] for c in ranked_candidates}
         winner = sort_dict_desc(win_loss)[0][0]
-        # Prepare results
+        # Prepare result
         name = 'Copeland\'s method'
         details = [f'{len(candidates)} candidates',
                    f'{n} ranks per ballot']
-        vr = ElectionResult(name, win_loss, [winner], count_type='Win-loss',
-                           percent_column=False, details=details)
-        return vr
+        result = ElectionResult(name, win_loss, [winner], count_type='Win-loss',
+                                percent_column=False, details=details)
+        return result
 
     def simulate_borda_count(self, candidates, variant='standard',
                              randomize=False):
@@ -775,7 +809,7 @@ class District:
                 scores[candidate] += round(score)
         # The winner is the candidate with the highest score
         winner = sort_dict_desc(scores)[0][0]
-        # Prepare results
+        # Prepare result
         name = 'Borda count'
         details = []
         if variant == 'dowdall':
@@ -786,9 +820,9 @@ class District:
                         f'{n} ranks per ballot'])
         if randomize:
             details.append('Randomized ballot generation')
-        vr = ElectionResult(name, scores, [winner], count_type='Score',
-                           details=details)
-        return vr
+        result = ElectionResult(name, scores, [winner], count_type='Score',
+                                details=details)
+        return result
 
     def simulate_bucklin_voting(self, candidates, randomize=False):
         """Simulates Bucklin voting.
@@ -824,7 +858,7 @@ class District:
         ballots = self.generate_ranked_ballots(n, candidates, randomize)
         # Count the votes on each round
         total_votes = sum([v for r, v in ballots])
-        results = {c: 0 for c in candidates}
+        counts = {c: 0 for c in candidates}
         while True:
             # Loop through ballots
             for ranking, votes in ballots:
@@ -833,12 +867,12 @@ class District:
                     continue
                 # Add votes to remaining first choice
                 candidate = ranking[0]
-                results[candidate] += votes
+                counts[candidate] += votes
                 # Remove this choice from the ranking
                 del ranking[0]
             # Check if a majority was reached
             majority_reached = False
-            for candidate, votes in results:
+            for candidate, votes in counts:
                 if votes > 0.5 * total_votes:
                     majority_reached = True
                     break
@@ -846,15 +880,15 @@ class District:
             if majority_reached:
                 break
         # The winner is the candidate with the most votes
-        winner = sort_dict_desc(results)[0][0]
-        # Prepare results
+        winner = sort_dict_desc(counts)[0][0]
+        # Prepare result
         name = 'Bucklin voting'
         details = [f'{len(candidates)} candidates',
                    f'{n} ranks per ballot']
         if randomize:
             details.append('Randomized ballot generation')
-        vr = ElectionResult(name, results, [winner], details=details)
-        return vr
+        result = ElectionResult(name, counts, [winner], details=details)
+        return result
     
     def simulate_score_voting(self, candidates, min_score, max_score,
                               randomize=False):
@@ -898,21 +932,21 @@ class District:
         ballots = self.generate_score_ballots(
             n, candidates, min_score, max_score, randomize)
         # Count the scores for each candidate
-        results = {c: 0 for c in candidates}
+        scores = {c: 0 for c in candidates}
         for ballot, votes in ballots:
             for candidate, score in ballot.items():
-                results[candidate] += votes * score
+                scores[candidate] += votes * score
         # The winner is the candidate with the highest score
-        winner = sort_dict_desc(results)[0][0]
-        # Prepare results
+        winner = sort_dict_desc(scores)[0][0]
+        # Prepare result
         name = 'Score voting'
         details = [f'Score range [{min_score}, {max_score}]',
                    f'{len(candidates)} candidates',
                    f'{n} ranks per ballot',
                    'Randomized selection']
-        vr = ElectionResult(name, results, [winner], count_type='Score', 
-                           percent_column=False, details=details)
-        return vr
+        result = ElectionResult(name, scores, [winner], count_type='Score', 
+                                percent_column=False, details=details)
+        return result
 
     def simulate_cav(self, candidates, randomize=False):
         """Simulates combined approval voting or evaluative voting.
@@ -937,13 +971,14 @@ class District:
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
-        # Get results: score voting with score range [-1, 1]
-        vr = self.simulate_score_voting(candidates, -1, 1, randomize=randomize)
+        # Get result: score voting with score range [-1, 1]
+        result = self.simulate_score_voting(
+            candidates, -1, 1, randomize=randomize)
         # Change name
-        vr.name = 'Combined approval voting (CAV)'
+        result.voting_system = 'Combined approval voting (CAV)'
         # Change score range line
-        vr.details[0] = 'Scores used: support (1), neutral (0), oppose (-1)'
-        return vr
+        result.details[0] = 'Scores used: support (1), neutral (0), oppose (-1)'
+        return result
     
     def simulate_approval_voting(self, candidates, randomize=False):
         """Simulates approval voting.
@@ -967,15 +1002,16 @@ class District:
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
-        # Get results: score voting with score range [0, 1]
-        vr = self.simulate_score_voting(candidates, 0, 1, randomize=randomize)
+        # Get result: score voting with score range [0, 1]
+        result = self.simulate_score_voting(
+            candidates, 0, 1, randomize=randomize)
         # Change name
-        vr.name = 'Approval voting'
+        result.voting_system = 'Approval voting'
         # Change results count type
-        vr.count_type = 'Approvals'
+        result.count_type = 'Approvals'
         # Change score range line
-        vr.details[0] = 'Each approval counts as one point'
-        return vr
+        result.details[0] = 'Each approval counts as one point'
+        return result
     
     def simulate_star_bloc_voting(self, seats, candidates, randomize=False):
         """Simulates score-then-automatic-runoff (STAR) bloc voting.
@@ -1002,8 +1038,11 @@ class District:
             process and other relevant information.
         
         Raises:
+            NoSeatsToFillError: If there number of seats given is less than 1.
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
+        if seats < 1:
+            raise NoSeatsToFillError
         if len(candidates) <= 1 or seats > len(candidates):
             raise NotEnoughCandidatesError
         # Ballot size
@@ -1011,15 +1050,15 @@ class District:
         # Generate score ballots
         ballots = self.generate_score_ballots(n, candidates, 0, 5, randomize)
         # Count the scores for each candidate
-        results = {c: 0 for c in candidates}
+        scores = {c: 0 for c in candidates}
         for ballot, votes in ballots:
             for candidate, score in ballot:
-                results[candidate] += votes * score
+                scores[candidate] += votes * score
         # Fill the seats
         winners = []
         while len(winners) < seats:
             # Get remaining candidates
-            remaining = [(c, v) for c, v in sort_dict_desc(results)
+            remaining = [(c, v) for c, v in sort_dict_desc(scores)
                          if c not in winners and v > 0]
             # If the number of remaining candidates is equal to
             # the number of seats, fill seats and stop the process
@@ -1044,14 +1083,15 @@ class District:
             # The candidate with the highest runoff score wins a seat
             winner = sort_dict_desc(runoff)[0][0]
             winners.append(winner)
-        # Prepare results
+        # Prepare result
         name = 'Score-then-automatic-runoff (STAR) bloc voting'
         details = [f'{seats} seats',
                    f'{len(candidates)} candidates',
                    f'{n} ranks per ballot',
                    'Randomized selection']
-        vr = ElectionResult(name, results, winners, details=details)
-        return vr
+        result = ElectionResult(name, scores, winners, count_type='Score',
+                                details=details)
+        return result
     
     def simulate_star_voting(self, candidates, randomize=False):
         """Simulates score-then-automatic-runoff (STAR) voting.
@@ -1076,10 +1116,21 @@ class District:
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
         """
-        # Get results: single-seat STAR bloc voting
-        vr = self.simulate_star_bloc_voting(1, candidates, randomize=randomize)
+        # Get result: single-seat STAR bloc voting
+        result = self.simulate_star_bloc_voting(
+            1, candidates, randomize=randomize)
         # Change name
-        vr.name = 'Score-then-automatic-runoff (STAR) voting'
+        result.voting_system = 'Score-then-automatic-runoff (STAR) voting'
         # Remove number of seats line
-        del vr.details[0]
-        return vr
+        del result.details[0]
+        return result
+
+
+class NoSeatsToFillError(Exception):
+    pass
+
+class NotEnoughCandidatesError(Exception):
+    pass
+
+class InvalidScoreRangeError(Exception):
+    pass
