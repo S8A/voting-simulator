@@ -4,19 +4,19 @@
 
 class Candidate:
 
-    def __init__(self, party, id):
-        """Creates a candidate with the given id and party/affiliation.
+    def __init__(self, party, identifier):
+        """Creates a candidate with the given identifier and party/affiliation.
 
         Args:
-            party: Character representing a party/affiliation.
-            id: Unique identifier, preferably an integer.
+            party: Party/affiliation of the candidate.
+            identifier: Unique identifier number.
         """
         self.party = party
-        self.id = id
+        self.id = identifier
 
     def __repr__(self):
         """Returns a string representation of the candidate."""
-        return f'{PARTIES[self.party]} {self.id}'
+        return f'{self.party.name} {self.id}'
 
     def __eq__(self, other):
         """Check if this candidate is equal to another one or not."""
