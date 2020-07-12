@@ -5,10 +5,11 @@
 import itertools as itls
 import math as m
 import random as rd
-from .utils import sort_dict_desc
+from .utils import generate_voter_groups, sort_dict_desc, make_table
 from .candidate import Candidate
-from .pattern import VotingPattern, ALL_PATTERNS, REAL_PATTERNS
-from .results import VotingResults
+from .party import Party
+from .voter_group import VoterGroup
+from .result import ElectionResult
 
 
 class NotEnoughCandidatesError(Exception):
@@ -18,61 +19,93 @@ class InvalidScoreRangeError(Exception):
     pass
 
 
-class VotingDistrict:
+class District:
 
-    def __init__(self, name, population, generate=True, realistic=True):
-        """Creates a random voting district with the given population size."""
+    def __init__(self, name, total_voters, voter_groups=[]):
+        """Creates a voting district with the given number of voters.
+        
+        Args:
+            name: Name of the district.
+            total_voters: Total number of voters in the district.
+            voter_groups: Optional list of voter groups to account for, 
+                instead of generating all possible voter groups.
+        """
         self.name = name
-        self.population = population
-        self.pattern_map = {}
-        if generate:
-            self.pattern_map = self.generate_pattern_map(realistic)
+        self.total_voters = total_voters
+        self.voter_groups = voter_groups
+        self.voter_map = {}
+        self.generate_voter_map()
     
     def __repr__(self):
         """Returns a string representation of the voting district."""
-        return f'{self.name} ({self.population} voters)'
+        return f'{self.name} ({self.total_voters} voters)'
     
-    def generate_pattern_map(self, realistic):
-        """Generates a map of voting patterns to percent of population."""
-        pattern_map = {}
-        remaining = self.population
-        possibilities = REAL_PATTERNS if realistic else ALL_PATTERNS
-        rd.shuffle(possibilities)
-        for i, pattern in enumerate(possibilities):
-            n = remaining
-            if i < len(possibilities) - 1:
-                while n >= remaining:
-                    n = rd.randint(0.0, round(0.6 * self.population))
-            pattern_map[pattern] = (
-                n, round(100.0 * n / self.population, 2))
-            remaining -= n
-        return pattern_map
+    def summary(self):
+        """Returns a summary of the district."""
+        summary = [f'{self} :.\n']
+        summary.extend(self.voter_map_table())
+        return '\n'.join(summary)
+    
+    def voter_map_table(self):
+        """Returns the voter map as a text table."""
+        widths = [50, 20, 10]
+        header = ['Voter group', 'Voters', 'Percent']
+        sorted_voter_groups = sort_dict_desc(self.voter_map)
+        body = [[vg, count, f'{100.0 * count / self.total_voters :.2f}%']
+                for vg, count in sorted_voter_groups]
+        return make_table(widths, header, body)
+    
+    def generate_voter_map(self):
+        """Generates a random map of voter groups to number of voters."""
+        # Use list of voter groups if given
+        voter_groups = self.voter_groups
+        # If not, generate all possible voter groups
+        if not voter_groups:
+            voter_groups = generate_voter_groups()
+        # Initialize voter map
+        voter_map = {vg: 0 for vg in voter_groups}
+        # Remaining number of voters to distribute
+        remaining = self.total_voters
+        # Maximum number of voters per group: 40% of total voters
+        max_voters = round(0.4 * self.total_voters)
+        # Fill voter map
+        for i, vg in enumerate(voter_groups):
+            if i == len(voter_groups) - 1:
+                # If this is the last voter group, assign remaining voters
+                voter_map[vg] = remaining
+            else:
+                # Otherwise, assign this voter group a random number of voters
+                # between zero and either the maximum number of voters per
+                # group or the number of remaining voters to distribute,
+                # whichever is bigger
+                voter_map[vg] = rd.randint(0, max(max_voters, remaining))
+                remaining -= voter_map[vg]
+        return voter_map
 
     def generate_block_ballots(self, n, candidates, randomize):
         """Generates block voting ballots.
 
-        Each voter group has n available votes, which they fill first with 
-        candidates of their preferred party, then from their second preferred 
-        party, and so on as needed to fill their ballots. The order of 
-        selection may be randomize or not.
+        Each ballot must have exactly n candidates. Each voter group fills 
+        their ballots with candidates of their preferred party, then from their 
+        second preferred party, and so on as needed to fill their ballots. The 
+        order of selection may be randomized or not.
 
         Args:
-            n: Number of available votes per ballot.
+            n: Number of votes per ballot.
             candidates: List of candidates. Assumed to be larger than n.
             randomize: If true, the candidates of each party are shuffled 
                 before selection when constructing the ballots.
 
         Returns:
-            A list of tuples, containing each voter group's ballot and votes. 
-            Each ballot is a list of candidates.
+            A list of tuples, containing each voter group's ballot and number 
+            of voters. Each ballot is a list of candidates.
         """
         ballots = []
-        # For each voter group (entry in pattern map)
-        for pattern, popularity in self.pattern_map.items():
+        # Fill ballots by voter group
+        for voter_group, voters in self.voter_map.items():
             ballot = []
-            votes = popularity[0]
             # Loop through each party in order of preference
-            for party in pattern:
+            for party in voter_group.preferences:
                 # Stop if there are no votes left
                 if len(ballot) >= n:
                     break
@@ -83,16 +116,17 @@ class VotingDistrict:
                 # Add as many candidates as needed to try to fill the ballot
                 ballot.extend(choices[0:n])
             # Add ballot to list
-            ballots.append((ballot, votes))
+            ballots.append((ballot, voters))
         return ballots
     
     def generate_ranked_ballots(self, n, candidates, randomize):
         """Generates a ranked ballot for each voter group.
 
-        Each voter group chooses and ranks the candidates as follows: the 
-        first rank goes to a candidate of their preferred party, the second 
-        rank goes to a candidate chosen at random from any of their two most 
-        preferred parties, and so on until the ballot is full.
+        Each ballot must rank exactly n candidates. Each voter group chooses 
+        and ranks the candidates as follows: the first rank goes to a candidate 
+        of their preferred party, the second rank goes to a candidate chosen at 
+        random from any of their two most preferred parties, and so on until 
+        the ballot is full.
 
         Args:
             n: Number of ranks per ballot.
@@ -101,44 +135,45 @@ class VotingDistrict:
                 each ballot.
 
         Returns:
-            A list of tuples, containing each voter group's ballot and votes. 
-            Each ballot is a list of candidates ranked in order of preference.
+            A list of tuples, containing each voter group's ballot and number 
+            of voters. Each ballot is a list of candidates ranked in order of 
+            preference.
         """
         ballots = []
-        # For each voter group (entry in pattern map)
-        for pattern, popularity in self.pattern_map.items():
-            votes = popularity[0]
-            ranking = []
+        # Fill ballots by voter group
+        for voter_group, voters in self.voter_map.items():
+            ranked_ballot = []
             # Add candidates to the ballot until it's full
             for k in range(n):
                 # Select the first k+1 parties in order of preference
-                parties = pattern[0:k+1]
+                parties = voter_group.preferences[0:k+1]
                 # Extract a candidate from each party
                 # If randomize=True, choose at random
                 choices = []
                 for p in parties:
                     party_list = [c for c in candidates
-                                  if c.party == p and c not in ranking]
+                                  if c.party == p and c not in ranked_ballot]
                     if randomize:
                         choices.append(rd.choice(party_list))
                     else:
                         choices.append(party_list[0])
                 # Select a candidate and add to ranking
                 candidate = rd.choice(choices) if randomize else choices[-1]
-                ranking.append(candidate)
+                ranked_ballot.append(candidate)
             # Add finished ballot to list
-            ballots.append((ranking, votes))
+            ballots.append((ranked_ballot, voters))
         return ballots
 
     def generate_score_ballots(self, n, candidates, min_score, max_score,
                                randomize):
         """Generates a score ballot for each voter group.
 
-        Each voter group gives the maximum score to a candidate of the party 
-        they most like, and the minimum score to a candidate of the party they 
-        least like. Random scores lower than the maximum are set for other 
-        candidates to fill the ballot, but with higher probability of higher 
-        scores for candidates of more preferred parties.
+        Each ballot must score exactly n candidates. Each voter group gives 
+        the maximum score to a candidate of the party they most like, and the 
+        minimum score to a candidate of the party they least like. Random 
+        scores lower than the maximum are set for other candidates to fill 
+        the ballot, but with higher probability of higher scores for candidates 
+        of more preferred parties.
 
         Because the scores of the intermediate candidates are always random, 
         this function does not guarantee reproducibility for n > 2 even if 
@@ -154,44 +189,44 @@ class VotingDistrict:
                 each ballot.
 
         Returns:
-            A list of tuples, containing each voter group's ballot and votes. 
-            Each ballot is represented as a dictionary mapping a each candidate 
-            to its score.
+            A list of tuples, containing each voter group's ballot and number 
+            of voters. Each ballot is represented as a dictionary mapping 
+            candidates to their corresponding score.
         """
         ballots = []
-        # For each voter group (entry in pattern map)
-        for pattern, popularity in self.pattern_map.items():
-            votes = popularity[0]
-            ballot = {}
+        # Fill ballots by voter group
+        for voter_group, voters in self.voter_map.items():
+            prefs = voter_group.preferences
+            scores = {}
             # Add candidates to the ballot until it's full
             for k in range(n):
                 if k == 0:
                     # Give highest score to a candidate from the voter group's
                     # most-preferred party (MPP)
-                    mpp = [c for c in candidates if c.party == pattern[0]]
+                    mpp = [c for c in candidates if c.party == prefs[0]]
                     highest_scored = rd.choice(mpp) if randomize else mpp[0]
                     # Add to ballot
-                    ballot[highest_scored] = max_score
+                    scores[highest_scored] = max_score
                 elif k == 1:
                     # Give lowest score to a candidate from the voter group's
                     # least-preferred party (LPP)
                     lpp = [c for c in candidates
-                           if c.party == pattern[-1] and c not in ballot.keys()]
+                           if c.party == prefs[-1] and c not in scores.keys()]
                     lowest_scored = rd.choice(lpp) if randomize else mpp[0]
                     # Add to ballot
-                    ballot[lowest_scored] = min_score
+                    scores[lowest_scored] = min_score
                 else:
                     # Select the first k-1 parties in order of preference
                     # Using k-1 instead of k to account for last candidate
                     # already scored
-                    parties = pattern[0:k-1]
+                    parties = prefs[0:k-1]
                     # Extract a candidate from each party
                     # If randomize=True, choose at random
                     choices = []
                     for p in parties:
                         party_list = [
                             c for c in candidates
-                            if c.party == p and c not in ballot.keys()]
+                            if c.party == p and c not in scores.keys()]
                         if randomize:
                             choices.append(rd.choice(party_list))
                         else:
@@ -199,16 +234,16 @@ class VotingDistrict:
                     # Select a candidate
                     candidate = rd.choice(choices) if randomize else choices[-1]
                     # Preference factor for the candidate's party
-                    party_index = pattern.index(candidate.party)
-                    pref_factor = 1 - (party_index / len(pattern))
+                    party_index = prefs.index(candidate.party)
+                    pref_factor = 1 - (party_index / len(prefs))
                     # Choose a random score using a triangular distribution 
                     # and the preference factor to vary the mode
                     mode = round(pref_factor * (max_score - 1))
                     score = rd.triangular(min_score, max_score - 1, mode)
                     # Add to ballot
-                    ballot[candidate] = score
+                    scores[candidate] = score
             # Add ballot to list
-            ballots.append((ballot, votes))
+            ballots.append((scores, voters))
         return ballots
 
     def simulate_ntv(self, n, seats, candidates, randomize=False):
@@ -228,8 +263,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -254,7 +289,7 @@ class VotingDistrict:
                    f'{len(candidates)} candidates']
         if randomize:
             details.append('Randomized ballot generation')
-        vr = VotingResults(name, results, winners, details=details)
+        vr = ElectionResult(name, results, winners, details=details)
         return vr
     
     def simulate_sntv(self, seats, candidates, randomize=False):
@@ -273,8 +308,8 @@ class VotingDistrict:
             randomize: Randomize candidate selection or not.
         
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -302,8 +337,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -332,8 +367,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -369,8 +404,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -410,7 +445,7 @@ class VotingDistrict:
         details = [f'{len(candidates)} initial candidates']
         if randomize:
             details.append('Randomized ballot generation')
-        vr = VotingResults(name, results, [winner], details=details)
+        vr = ElectionResult(name, results, [winner], details=details)
         return vr
     
     def simulate_stv(self, seats, candidates, droop_quota=True,
@@ -457,8 +492,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -565,7 +600,7 @@ class VotingDistrict:
             details.append(method)
         else:
             details.append('Elimination transfers only')
-        vr = VotingResults(name, results, winners, details=details)
+        vr = ElectionResult(name, results, winners, details=details)
         return vr
 
     def simulate_irv(self, candidates, randomize=False):
@@ -591,8 +626,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -631,8 +666,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -678,7 +713,7 @@ class VotingDistrict:
         name = 'Copeland\'s method'
         details = [f'{len(candidates)} candidates',
                    f'{n} ranks per ballot']
-        vr = VotingResults(name, win_loss, [winner], count_type='Win-loss',
+        vr = ElectionResult(name, win_loss, [winner], count_type='Win-loss',
                            percent_column=False, details=details)
         return vr
 
@@ -711,8 +746,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -751,7 +786,7 @@ class VotingDistrict:
                         f'{n} ranks per ballot'])
         if randomize:
             details.append('Randomized ballot generation')
-        vr = VotingResults(name, scores, [winner], count_type='Score',
+        vr = ElectionResult(name, scores, [winner], count_type='Score',
                            details=details)
         return vr
 
@@ -775,8 +810,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -818,7 +853,7 @@ class VotingDistrict:
                    f'{n} ranks per ballot']
         if randomize:
             details.append('Randomized ballot generation')
-        vr = VotingResults(name, results, [winner], details=details)
+        vr = ElectionResult(name, results, [winner], details=details)
         return vr
     
     def simulate_score_voting(self, candidates, min_score, max_score,
@@ -845,8 +880,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -875,7 +910,7 @@ class VotingDistrict:
                    f'{len(candidates)} candidates',
                    f'{n} ranks per ballot',
                    'Randomized selection']
-        vr = VotingResults(name, results, [winner], count_type='Score', 
+        vr = ElectionResult(name, results, [winner], count_type='Score', 
                            percent_column=False, details=details)
         return vr
 
@@ -896,8 +931,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -926,8 +961,8 @@ class VotingDistrict:
             randomize: Randomize selection or not.
 
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -963,8 +998,8 @@ class VotingDistrict:
             candidates: List of candidates
         
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -1015,7 +1050,7 @@ class VotingDistrict:
                    f'{len(candidates)} candidates',
                    f'{n} ranks per ballot',
                    'Randomized selection']
-        vr = VotingResults(name, results, winners, details=details)
+        vr = ElectionResult(name, results, winners, details=details)
         return vr
     
     def simulate_star_voting(self, candidates, randomize=False):
@@ -1035,8 +1070,8 @@ class VotingDistrict:
             candidates: List of candidates
         
         Returns:
-            A VotingResults object encapsulating the type, results and 
-            parameters of the election.
+            ElectionResult object containing the results of the electoral 
+            process and other relevant information.
         
         Raises:
             NotEnoughCandidatesError: If the list of candidates is too short.
@@ -1048,5 +1083,3 @@ class VotingDistrict:
         # Remove number of seats line
         del vr.details[0]
         return vr
-
-
